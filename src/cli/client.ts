@@ -16,10 +16,12 @@
  *   ncl groups help
  */
 import { randomUUID } from 'crypto';
+import { pathToFileURL } from 'url';
 
 import { formatResponse } from './format.js';
 import type { RequestFrame } from './frame.js';
 import { SocketTransport } from './socket-client.js';
+import { readStdinJsonArgs } from './stdin-json.js';
 import type { Transport } from './transport.js';
 import { formatTransportError } from './transport-errors.js';
 
@@ -31,8 +33,22 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const { command, args, json } = parseArgv(argv);
-  const req: RequestFrame = { id: randomUUID(), command, args };
+  const { command, args, json, stdinJson } = parseArgv(argv);
+  let requestArgs = args;
+  if (stdinJson) {
+    try {
+      requestArgs = await readStdinJsonArgs(process.stdin, args);
+    } catch (err) {
+      process.stderr.write(`ncl: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(2);
+    }
+  }
+  const req: RequestFrame = {
+    id: randomUUID(),
+    command,
+    args: requestArgs,
+    ...(stdinJson ? { argSource: 'stdin-json' } : {}),
+  };
   const transport: Transport = pickTransport();
 
   let res;
@@ -57,19 +73,25 @@ function pickTransport(): Transport {
   return new SocketTransport();
 }
 
-function parseArgv(argv: string[]): {
+export function parseArgv(argv: string[]): {
   command: string;
   args: Record<string, unknown>;
   json: boolean;
+  stdinJson: boolean;
 } {
   const positional: string[] = [];
   const args: Record<string, unknown> = {};
   let json = false;
+  let stdinJson = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') {
       json = true;
+      continue;
+    }
+    if (a === '--stdin-json') {
+      stdinJson = true;
       continue;
     }
     if (a.startsWith('--')) {
@@ -98,7 +120,7 @@ function parseArgv(argv: string[]): {
   // → command "groups-get", id "abc").
   const command = positional.join('-');
 
-  return { command, args, json };
+  return { command, args, json, stdinJson };
 }
 
 function printUsage(): void {
@@ -112,7 +134,9 @@ function printUsage(): void {
   );
 }
 
-main().catch((err) => {
-  process.stderr.write(`ncl: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(2);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    process.stderr.write(`ncl: unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(2);
+  });
+}

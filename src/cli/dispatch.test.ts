@@ -100,6 +100,25 @@ register({
 });
 
 register({
+  name: 'stdin-json-command',
+  description: 'command accepting structured stdin',
+  access: 'open',
+  acceptsStdinJson: true,
+  parseArgs: (raw) => raw,
+  handler: async (args) => ({ echo: args }),
+});
+
+register({
+  name: 'groups-stdin-test',
+  description: 'resource command accepting structured stdin',
+  resource: 'groups',
+  access: 'open',
+  acceptsStdinJson: true,
+  parseArgs: (raw) => raw,
+  handler: async (args) => ({ echo: args }),
+});
+
+register({
   name: 'sessions-list',
   description: 'test command (sessions resource)',
   resource: 'sessions',
@@ -970,6 +989,88 @@ describe('--help interception', () => {
 
     expect(resp.ok).toBe(true);
     expect(approvalState.requestApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe('--stdin-json command opt-in', () => {
+  it('rejects stdin-derived args for commands that do not opt in', async () => {
+    const resp = await dispatch(
+      { id: '1', command: 'test-cmd', args: { secret: 'value' }, argSource: 'stdin-json' },
+      { caller: 'host' },
+    );
+
+    expect(resp.ok).toBe(false);
+    if (!resp.ok) {
+      expect(resp.error.code).toBe('invalid-args');
+      expect(resp.error.message).toContain('does not accept --stdin-json');
+    }
+  });
+
+  it('passes stdin-derived args to a command that opts in', async () => {
+    const resp = await dispatch(
+      { id: '1', command: 'stdin-json-command', args: { secret: 'value' }, argSource: 'stdin-json' },
+      { caller: 'host' },
+    );
+
+    expect(resp.ok).toBe(true);
+    if (resp.ok) expect(resp.data).toEqual({ echo: { secret: 'value' } });
+  });
+
+  it('advertises structured stdin only in an opted-in command help', async () => {
+    const optedIn = await dispatch(
+      { id: '1', command: 'stdin-json-command', args: { help: true } },
+      { caller: 'host' },
+    );
+    const defaultCommand = await dispatch({ id: '2', command: 'test-cmd', args: { help: true } }, { caller: 'host' });
+
+    expect(optedIn.ok).toBe(true);
+    if (optedIn.ok) {
+      expect(optedIn.data).toContain('ncl stdin-json-command [--stdin-json]');
+      expect(optedIn.data).toContain('Input:');
+    }
+    expect(defaultCommand.ok).toBe(true);
+    if (defaultCommand.ok) expect(defaultCommand.data).not.toContain('--stdin-json');
+  });
+
+  it('adds structured stdin to the usage line of generated deep help', async () => {
+    mockGetResource.mockImplementation((plural: string) =>
+      plural === 'groups'
+        ? {
+            name: 'group',
+            plural: 'groups',
+            table: 'agent_groups',
+            description: 'Agent groups.',
+            idColumn: 'id',
+            scopeField: 'id',
+            columns: [],
+            operations: {},
+            customOperations: {
+              'stdin test': {
+                access: 'open',
+                description: 'Deep stdin test op.',
+                handler: async () => ({}),
+              },
+            },
+          }
+        : undefined,
+    );
+
+    const resp = await dispatch({ id: '1', command: 'groups-stdin-test', args: { help: true } }, { caller: 'host' });
+
+    expect(resp.ok).toBe(true);
+    if (resp.ok) {
+      expect((resp.data as string).split('\n')[0]).toBe('ncl groups stdin test [--stdin-json]');
+      expect(resp.data).toContain('Input:');
+    }
+  });
+
+  it('applies authorization before reporting that a command did not opt in', async () => {
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'global' });
+
+    const resp = await dispatch({ id: '1', command: 'host-only-cmd', args: {}, argSource: 'stdin-json' }, agentCtx());
+
+    expect(resp.ok).toBe(false);
+    if (!resp.ok) expect(resp.error.code).toBe('forbidden');
   });
 });
 

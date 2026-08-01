@@ -23,7 +23,7 @@ import type { CallerContext, ErrorCode, RequestFrame, ResponseFrame } from './fr
 import { localizeIsoTimestamps } from './format.js';
 import { getResource } from './crud.js';
 import { listVerbs, renderVerbHelp } from './help-render.js';
-import { commandGuard, listCommands, lookup } from './registry.js';
+import { commandGuard, listCommands, lookup, type CommandDef } from './registry.js';
 
 type DispatchOptions = {
   /** Verified approval row when a command is replayed after approval. */
@@ -120,6 +120,13 @@ export async function dispatch(
     return err(req.id, 'forbidden', decision.reason);
   }
 
+  // Structured stdin is opt-in per command. Check after authorization so an
+  // agent cannot use the flag to probe commands it is not allowed to see, but
+  // before help, approval holds, or the handler can consume the args.
+  if (req.argSource !== undefined && (req.argSource !== 'stdin-json' || !cmd.acceptsStdinJson)) {
+    return err(req.id, 'invalid-args', `Command "${cmd.name}" does not accept --stdin-json.`);
+  }
+
   // `--help` interception: answer with the command's generated help instead of
   // executing. Placed after the guard's deny (a group-scoped agent can't probe
   // forbidden resources) and BEFORE hold execution — asking for help on an
@@ -127,7 +134,7 @@ export async function dispatch(
   if (req.args.help === true) {
     // Carry the help text in `human` too, so both clients print it verbatim
     // as clean multi-line text instead of a JSON-stringified blob.
-    const helpText = commandHelp(cmd.name, cmd.resource, cmd.description);
+    const helpText = commandHelp(cmd);
     return { id: req.id, ok: true, data: helpText, human: helpText };
   }
 
@@ -152,7 +159,15 @@ export async function dispatch(
       session,
       agentName,
       action: 'cli_command',
-      payload: { frame: { id: req.id, command: req.command, args: req.args }, callerContext: ctx },
+      payload: {
+        frame: {
+          id: req.id,
+          command: req.command,
+          args: req.args,
+          ...(req.argSource ? { argSource: req.argSource } : {}),
+        },
+        callerContext: ctx,
+      },
       title: `CLI: ${req.command}`,
       question: `Agent "${agentName}" wants to run:\n\`ncl ${req.command}${argSummary ? ' ' + argSummary : ''}\``,
     });
@@ -259,7 +274,12 @@ function parseCallerContext(value: unknown): CallerContext | undefined {
 }
 
 /** Help text for a resolved command: deep verb help when derivable, else description. */
-function commandHelp(name: string, resource: string | undefined, description: string): string {
+function commandHelp(cmd: CommandDef): string {
+  const helpText = resolveCommandHelp(cmd.name, cmd.resource, cmd.description);
+  return cmd.acceptsStdinJson ? appendStdinJsonHelp(cmd.name, helpText) : helpText;
+}
+
+function resolveCommandHelp(name: string, resource: string | undefined, description: string): string {
   if (resource && name.startsWith(`${resource}-`)) {
     const res = getResource(resource);
     const verb = name.slice(resource.length + 1);
@@ -275,6 +295,22 @@ function commandHelp(name: string, resource: string | undefined, description: st
     }
   }
   return description;
+}
+
+function appendStdinJsonHelp(commandName: string, helpText: string): string {
+  const lines = helpText.split('\n');
+  if (lines[0].startsWith('ncl ')) {
+    lines[0] += ' [--stdin-json]';
+  } else {
+    lines.unshift(`ncl ${commandName} [--stdin-json]`, '');
+  }
+  lines.push(
+    '',
+    'Input:',
+    '  --stdin-json  Read one bounded JSON object from stdin.',
+    '                Keys must not also be supplied on argv.',
+  );
+  return lines.join('\n');
 }
 
 /**

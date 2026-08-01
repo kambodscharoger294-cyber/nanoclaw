@@ -15,6 +15,8 @@ export type RequestFrame = {
   command: string;
   /** Command-specific. Each command's parseArgs validates. */
   args: Record<string, unknown>;
+  /** Present when the host CLI populated args through `--stdin-json`. */
+  argSource?: 'stdin-json';
 };
 
 export type ResponseFrame =

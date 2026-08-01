@@ -54,6 +54,11 @@ export type CommandDef<TArgs = unknown, TData = unknown> = {
    * Custom operations return ad-hoc shapes and leave this undefined.
    */
   generic?: 'list' | 'get';
+  /**
+   * Opts this command into receiving args read by the host CLI's
+   * `--stdin-json` flag. Omitted commands reject stdin-derived args.
+   */
+  acceptsStdinJson?: boolean;
   /** Validates `frame.args` and produces the typed handler input. Throws on invalid. */
   parseArgs: (raw: Record<string, unknown>) => TArgs;
   handler: (args: TArgs, ctx: CallerContext) => Promise<TData>;
