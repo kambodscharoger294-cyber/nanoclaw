@@ -719,7 +719,7 @@ CREATE TABLE agent_groups (
 -- Container config is NOT a column here — it lives in a separate container_configs
 -- table (migration 014), keyed by agent_group_id, with columns: provider, model,
 -- effort, image_tag, assistant_name, max_messages_per_prompt, cli_scope, and JSON
--- columns skills / mcp_servers / packages_apt / packages_npm / additional_mounts.
+-- columns skills / mcp_servers / packages_apt / packages_npm / packages_pip / additional_mounts.
 -- The host materializes it into /workspace/agent/container.json for the container.
 
 -- Platform groups/channels (WhatsApp group, Slack channel, Discord channel, email thread, etc.)

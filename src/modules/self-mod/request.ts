@@ -28,15 +28,17 @@ export function validateInstallPackages(content: Record<string, unknown>, sessio
 
   const apt = (content.apt as string[]) || [];
   const npm = (content.npm as string[]) || [];
+  const pip = (content.pip as string[]) || [];
 
   const APT_RE = /^[a-z0-9][a-z0-9._+-]*$/;
   const NPM_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+  const PIP_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
   const MAX_PACKAGES = 20;
-  if (apt.length + npm.length === 0) {
-    notifyAgent(session, 'install_packages failed: at least one apt or npm package is required.');
+  if (apt.length + npm.length + pip.length === 0) {
+    notifyAgent(session, 'install_packages failed: at least one apt, npm, or pip package is required.');
     return false;
   }
-  if (apt.length + npm.length > MAX_PACKAGES) {
+  if (apt.length + npm.length + pip.length > MAX_PACKAGES) {
     notifyAgent(session, `install_packages failed: max ${MAX_PACKAGES} packages per request.`);
     return false;
   }
@@ -52,6 +54,12 @@ export function validateInstallPackages(content: Record<string, unknown>, sessio
     log.warn('install_packages: invalid npm package rejected', { pkg: invalidNpm });
     return false;
   }
+  const invalidPip = pip.find((p) => !PIP_RE.test(p));
+  if (invalidPip) {
+    notifyAgent(session, `install_packages failed: invalid pip package name "${invalidPip}".`);
+    log.warn('install_packages: invalid pip package rejected', { pkg: invalidPip });
+    return false;
+  }
   return true;
 }
 
@@ -60,14 +68,19 @@ export async function requestInstallPackagesHold(content: Record<string, unknown
   if (!agentGroup) return;
   const apt = (content.apt as string[]) || [];
   const npm = (content.npm as string[]) || [];
+  const pip = (content.pip as string[]) || [];
   const reason = (content.reason as string) || '';
 
-  const packageList = [...apt.map((p) => `apt: ${p}`), ...npm.map((p) => `npm: ${p}`)].join(', ');
+  const packageList = [
+    ...apt.map((p) => `apt: ${p}`),
+    ...npm.map((p) => `npm: ${p}`),
+    ...pip.map((p) => `pip: ${p}`),
+  ].join(', ');
   await requestApproval({
     session,
     agentName: agentGroup.name,
     action: 'install_packages',
-    payload: { apt, npm, reason },
+    payload: { apt, npm, pip, reason },
     title: 'Install Packages Request',
     question: `Agent "${agentGroup.name}" is attempting to install a package + rebuild container:\n${packageList}${reason ? `\nReason: ${reason}` : ''}`,
   });

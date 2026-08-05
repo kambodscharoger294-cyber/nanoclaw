@@ -679,9 +679,11 @@ the agent via a chat message when the agent is ready.
 Two fire-and-forget system-action tools let an agent extend its own runtime (both require
 admin approval, applied host-side):
 
-- **`install_packages`** — `{ apt?: string[], npm?: string[], reason?: string }`. Package
-  names are validated at the tool boundary and re-validated on the host. On approval the
-  host rebuilds the per-agent image and restarts the container.
+- **`install_packages`** — `{ apt?: string[], npm?: string[], pip?: string[], reason?: string }`.
+  Package names are validated at the tool boundary and re-validated on the host. On approval
+  the host rebuilds the per-agent image and restarts the container. `pip` packages pull in
+  `python3`/`pip` via apt automatically if not already present, and install with
+  `--break-system-packages` (no venv — the image has no other Python workload to conflict with).
 - **`add_mcp_server`** — `{ name, command, args?, env? }`. Wires an existing third-party MCP
   server into the agent's `container.json`; on approval the host updates the config and
   restarts (no rebuild — Bun runs the TS directly).

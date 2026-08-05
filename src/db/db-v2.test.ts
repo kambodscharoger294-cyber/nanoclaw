@@ -475,6 +475,7 @@ describe('container configs', () => {
       mcp_servers: '{}',
       packages_apt: '[]',
       packages_npm: '[]',
+      packages_pip: '[]',
       additional_mounts: '[]',
       cli_scope: 'global',
       timezone: null,

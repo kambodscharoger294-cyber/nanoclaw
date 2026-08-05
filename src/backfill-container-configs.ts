@@ -17,7 +17,7 @@ import type { ContainerConfigRow } from './types.js';
 
 interface LegacyContainerJson {
   mcpServers?: Record<string, McpServerConfig>;
-  packages?: { apt?: string[]; npm?: string[] };
+  packages?: { apt?: string[]; npm?: string[]; pip?: string[] };
   imageTag?: string;
   additionalMounts?: AdditionalMountConfig[];
   skills?: string[] | 'all';
@@ -63,6 +63,7 @@ export function backfillContainerConfigs(): void {
       mcp_servers: JSON.stringify(legacy.mcpServers ?? {}),
       packages_apt: JSON.stringify(legacy.packages?.apt ?? []),
       packages_npm: JSON.stringify(legacy.packages?.npm ?? []),
+      packages_pip: JSON.stringify(legacy.packages?.pip ?? []),
       additional_mounts: JSON.stringify(legacy.additionalMounts ?? []),
       cli_scope: 'group',
       timezone: null,

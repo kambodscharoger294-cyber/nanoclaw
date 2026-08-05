@@ -50,6 +50,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     mcp_servers: JSON.parse(row.mcp_servers),
     packages_apt: JSON.parse(row.packages_apt),
     packages_npm: JSON.parse(row.packages_npm),
+    packages_pip: JSON.parse(row.packages_pip),
     additional_mounts: JSON.parse(row.additional_mounts),
     cli_scope: row.cli_scope,
     timezone: row.timezone,
@@ -381,7 +382,7 @@ registerResource({
     'config add-package': {
       access: 'approval',
       description:
-        'Add a package to a group. Requires `ncl groups restart --rebuild` to take effect. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
+        'Add a package to a group. Requires `ncl groups restart --rebuild` to take effect. Use --id <group-id> and --apt <pkg>, --npm <pkg>, or --pip <pkg>.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -391,7 +392,8 @@ registerResource({
 
         const apt = args.apt as string | undefined;
         const npm = args.npm as string | undefined;
-        if (!apt && !npm) throw new Error('Provide --apt <pkg> or --npm <pkg>');
+        const pip = args.pip as string | undefined;
+        if (!apt && !npm && !pip) throw new Error('Provide --apt <pkg>, --npm <pkg>, or --pip <pkg>');
 
         if (apt) {
           const existing = JSON.parse(row.packages_apt) as string[];
@@ -407,9 +409,16 @@ registerResource({
             updateContainerConfigJson(id, 'packages_npm', existing);
           }
         }
+        if (pip) {
+          const existing = JSON.parse(row.packages_pip) as string[];
+          if (!existing.includes(pip)) {
+            existing.push(pip);
+            updateContainerConfigJson(id, 'packages_pip', existing);
+          }
+        }
 
         return {
-          added: { apt: apt || null, npm: npm || null },
+          added: { apt: apt || null, npm: npm || null, pip: pip || null },
           note: 'Image rebuild required for packages to take effect. Use install_packages from the agent or rebuild manually.',
         };
       },
@@ -417,7 +426,7 @@ registerResource({
     'config remove-package': {
       access: 'approval',
       description:
-        'Remove a package from a group. Requires `ncl groups restart --rebuild` to take effect. Use --id <group-id> and --apt <pkg> or --npm <pkg>.',
+        'Remove a package from a group. Requires `ncl groups restart --rebuild` to take effect. Use --id <group-id> and --apt <pkg>, --npm <pkg>, or --pip <pkg>.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -427,7 +436,8 @@ registerResource({
 
         const apt = args.apt as string | undefined;
         const npm = args.npm as string | undefined;
-        if (!apt && !npm) throw new Error('Provide --apt <pkg> or --npm <pkg>');
+        const pip = args.pip as string | undefined;
+        if (!apt && !npm && !pip) throw new Error('Provide --apt <pkg>, --npm <pkg>, or --pip <pkg>');
 
         if (apt) {
           const existing = JSON.parse(row.packages_apt) as string[];
@@ -439,9 +449,14 @@ registerResource({
           const filtered = existing.filter((p) => p !== npm);
           updateContainerConfigJson(id, 'packages_npm', filtered);
         }
+        if (pip) {
+          const existing = JSON.parse(row.packages_pip) as string[];
+          const filtered = existing.filter((p) => p !== pip);
+          updateContainerConfigJson(id, 'packages_pip', filtered);
+        }
 
         return {
-          removed: { apt: apt || null, npm: npm || null },
+          removed: { apt: apt || null, npm: npm || null, pip: pip || null },
           note: 'Image rebuild required for package changes to take effect.',
         };
       },

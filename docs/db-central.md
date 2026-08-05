@@ -319,6 +319,7 @@ CREATE TABLE container_configs (
   mcp_servers            TEXT NOT NULL DEFAULT '{}',
   packages_apt           TEXT NOT NULL DEFAULT '[]',
   packages_npm           TEXT NOT NULL DEFAULT '[]',
+  packages_pip           TEXT NOT NULL DEFAULT '[]',        -- added by migration 22
   additional_mounts      TEXT NOT NULL DEFAULT '[]',
   cli_scope              TEXT NOT NULL DEFAULT 'group',   -- disabled | group | global
   timezone               TEXT,                            -- IANA id; NULL = install-global TZ (added by migration 20)

@@ -558,7 +558,8 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
   if (!configRow) throw new Error('Container config not found');
   const aptPackages = JSON.parse(configRow.packages_apt) as string[];
   const npmPackages = JSON.parse(configRow.packages_npm) as string[];
-  if (aptPackages.length === 0 && npmPackages.length === 0) {
+  const pipPackages = JSON.parse(configRow.packages_pip) as string[];
+  if (aptPackages.length === 0 && npmPackages.length === 0 && pipPackages.length === 0) {
     throw new Error('No packages to install. Use install_packages first.');
   }
 
@@ -586,6 +587,28 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
     const allowlist = npmPackages.map((p) => `echo 'only-built-dependencies[]=${p}' >> /root/.npmrc`).join(' && ');
     dockerfile += `RUN ${allowlist} && pnpm install -g ${npmPackages.join(' ')}\n`;
   }
+  if (pipPackages.length > 0) {
+    // Base image has no Python at all — pull in python3 + pip first. Debian's
+    // Python enforces PEP 668 (externally-managed environment) for system-wide
+    // installs; --break-system-packages opts out deliberately since this image
+    // has no other Python workload to conflict with.
+    dockerfile += `RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip && rm -rf /var/lib/apt/lists/*\n`;
+
+    // torch's default PyPI wheel bundles NVIDIA CUDA packages (400MB+ each,
+    // gigabytes total) regardless of host arch — there's no GPU passthrough
+    // into these containers, so route torch/torchvision/torchaudio through
+    // PyTorch's official CPU-only wheel index instead. Everything else installs
+    // from the default PyPI index.
+    const TORCH_PACKAGES = new Set(['torch', 'torchvision', 'torchaudio']);
+    const torchPkgs = pipPackages.filter((p) => TORCH_PACKAGES.has(p));
+    const otherPkgs = pipPackages.filter((p) => !TORCH_PACKAGES.has(p));
+    if (torchPkgs.length > 0) {
+      dockerfile += `RUN pip3 install --no-cache-dir --break-system-packages --index-url https://download.pytorch.org/whl/cpu ${torchPkgs.join(' ')}\n`;
+    }
+    if (otherPkgs.length > 0) {
+      dockerfile += `RUN pip3 install --no-cache-dir --break-system-packages ${otherPkgs.join(' ')}\n`;
+    }
+  }
   dockerfile += 'USER node\n';
 
   // Overwrite the provenance label rather than letting it be inherited.
@@ -601,7 +624,13 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
 
   const imageTag = `${CONTAINER_IMAGE_BASE}:${agentGroupId}`;
 
-  log.info('Building per-agent-group image', { agentGroupId, imageTag, apt: aptPackages, npm: npmPackages });
+  log.info('Building per-agent-group image', {
+    agentGroupId,
+    imageTag,
+    apt: aptPackages,
+    npm: npmPackages,
+    pip: pipPackages,
+  });
 
   // Write Dockerfile to temp file and build
   const tmpDockerfile = path.join(DATA_DIR, `Dockerfile.${agentGroupId}`);

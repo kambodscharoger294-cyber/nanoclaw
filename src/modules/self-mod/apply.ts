@@ -49,10 +49,18 @@ export async function applyInstallPackages(payload: Record<string, unknown>, ses
     }
     updateContainerConfigJson(agentGroup.id, 'packages_npm', existing);
   }
+  if (payload.pip) {
+    const existing = JSON.parse(configRow.packages_pip) as string[];
+    for (const pkg of payload.pip as string[]) {
+      if (!existing.includes(pkg)) existing.push(pkg);
+    }
+    updateContainerConfigJson(agentGroup.id, 'packages_pip', existing);
+  }
 
   const pkgs = [
     ...((payload.apt as string[] | undefined) || []),
     ...((payload.npm as string[] | undefined) || []),
+    ...((payload.pip as string[] | undefined) || []),
   ].join(', ');
   log.info('Package install approved', { agentGroupId: session.agent_group_id });
   try {

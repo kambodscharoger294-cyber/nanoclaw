@@ -12,7 +12,14 @@ const SCALAR_COLUMNS = new Set([
   'cli_scope',
   'timezone',
 ]);
-const JSON_COLUMNS = new Set(['skills', 'mcp_servers', 'packages_apt', 'packages_npm', 'additional_mounts']);
+const JSON_COLUMNS = new Set([
+  'skills',
+  'mcp_servers',
+  'packages_apt',
+  'packages_npm',
+  'packages_pip',
+  'additional_mounts',
+]);
 
 export function getContainerConfig(agentGroupId: string): ContainerConfigRow | undefined {
   return getDb().prepare('SELECT * FROM container_configs WHERE agent_group_id = ?').get(agentGroupId) as
@@ -30,11 +37,11 @@ export function createContainerConfig(config: ContainerConfigRow): void {
     .prepare(
       `INSERT INTO container_configs (
         agent_group_id, provider, model, effort, image_tag, assistant_name,
-        max_messages_per_prompt, skills, mcp_servers, packages_apt, packages_npm,
+        max_messages_per_prompt, skills, mcp_servers, packages_apt, packages_npm, packages_pip,
         additional_mounts, cli_scope, timezone, updated_at
       ) VALUES (
         @agent_group_id, @provider, @model, @effort, @image_tag, @assistant_name,
-        @max_messages_per_prompt, @skills, @mcp_servers, @packages_apt, @packages_npm,
+        @max_messages_per_prompt, @skills, @mcp_servers, @packages_apt, @packages_npm, @packages_pip,
         @additional_mounts, @cli_scope, @timezone, @updated_at
       )`,
     )
@@ -113,7 +120,7 @@ export function updateContainerConfigScalars(
 /** Overwrite a JSON column wholesale. Used for skills, mcp_servers, packages_*, additional_mounts. */
 export function updateContainerConfigJson(
   agentGroupId: string,
-  column: 'skills' | 'mcp_servers' | 'packages_apt' | 'packages_npm' | 'additional_mounts',
+  column: 'skills' | 'mcp_servers' | 'packages_apt' | 'packages_npm' | 'packages_pip' | 'additional_mounts',
   value: unknown,
 ): void {
   if (!JSON_COLUMNS.has(column)) throw new Error(`Invalid JSON column: ${column}`);
