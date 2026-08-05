@@ -28,6 +28,7 @@ import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { EGRESS_NETWORK, egressNetworkArgs, ensureEgressNetwork } from './egress-lockdown.js';
+import { atomicChatEnvArgs } from './atomic-chat-env.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
@@ -179,7 +180,11 @@ async function spawnContainer(session: Session): Promise<void> {
   container.stderr?.on('data', (data) => {
     for (const line of data.toString().trim().split('\n')) {
       if (!line) continue;
-      log.debug(line, { container: agentGroup.folder });
+      if (line.includes('[ATOMIC]')) {
+        log.info(line, { container: agentGroup.folder });
+      } else {
+        log.debug(line, { container: agentGroup.folder });
+      }
       stderrTail.push(line);
       if (stderrTail.length > 10) stderrTail.shift();
     }
@@ -483,6 +488,7 @@ async function buildContainerArgs(
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${containerConfig.timezone ?? TIMEZONE}`);
+  args.push(...atomicChatEnvArgs());
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
