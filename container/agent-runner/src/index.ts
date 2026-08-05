@@ -30,6 +30,7 @@ import { buildSystemPromptAddendum } from './destinations.js';
 import { getTaskSeriesId } from './db/session-routing.js';
 import { ensureMemoryScaffold } from './memory/scaffold.js';
 import { MEMORY_SESSION_HOOK } from './memory/session-hook.js';
+import { withGatewayEnv } from './mcp-gateway-env.js';
 // Providers barrel — each enabled provider self-registers on import.
 // Provider skills append imports to providers/index.ts.
 import './providers/index.js';
@@ -93,7 +94,10 @@ async function main(): Promise<void> {
   };
 
   for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
-    mcpServers[name] = serverConfig;
+    // Forward the OneCLI gateway's proxy/CA env so this server's own outbound
+    // HTTPS calls get transparent credential injection instead of needing a
+    // raw API key embedded in its `env` — see mcp-gateway-env.ts.
+    mcpServers[name] = { ...serverConfig, env: withGatewayEnv(serverConfig.env) };
     log(`Additional MCP server: ${name} (${serverConfig.command})`);
   }
 
