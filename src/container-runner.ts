@@ -57,6 +57,13 @@ import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
 
+/** Pinned `gh` CLI release — see buildAgentGroupImage's apt-package handling. */
+const GH_CLI_VERSION = '2.97.0';
+const GH_CLI_SHA256 = {
+  amd64: 'a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112',
+  arm64: '73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5',
+};
+
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
 
@@ -585,7 +592,29 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
 
   let dockerfile = `FROM ${CONTAINER_IMAGE}\nUSER root\n`;
   if (aptPackages.length > 0) {
-    dockerfile += `RUN apt-get update && apt-get install -y ${aptPackages.join(' ')} && rm -rf /var/lib/apt/lists/*\n`;
+    // `gh` is special-cased to a pinned, checksum-verified binary install
+    // instead of apt: Debian's repo `gh` (bookworm: 2.23.0, Feb 2023) is not
+    // a deliberate pin — a future rebuild could silently resolve to a
+    // different version, against this project's pin-everything policy.
+    // Mirrors the same curl+sha256+install pattern the github-mcp-server MCP
+    // config already uses elsewhere.
+    const otherApt = aptPackages.filter((p) => p !== 'gh');
+    if (otherApt.length > 0) {
+      dockerfile += `RUN apt-get update && apt-get install -y ${otherApt.join(' ')} && rm -rf /var/lib/apt/lists/*\n`;
+    }
+    if (aptPackages.includes('gh')) {
+      dockerfile += `RUN ARCH=$(dpkg --print-architecture); \\
+    case "$ARCH" in \\
+      arm64) SHA=${GH_CLI_SHA256.arm64} ;; \\
+      amd64) SHA=${GH_CLI_SHA256.amd64} ;; \\
+      *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \\
+    esac; \\
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_$ARCH.tar.gz" -o /tmp/gh.tar.gz && \\
+    echo "$SHA  /tmp/gh.tar.gz" | sha256sum -c - && \\
+    tar -xzf /tmp/gh.tar.gz -C /tmp && \\
+    install -m 0755 "/tmp/gh_${GH_CLI_VERSION}_linux_$ARCH/bin/gh" /usr/local/bin/gh && \\
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_CLI_VERSION}_linux_$ARCH"\n`;
+    }
   }
   if (npmPackages.length > 0) {
     // pnpm skips build scripts unless packages are allowlisted. Append each
