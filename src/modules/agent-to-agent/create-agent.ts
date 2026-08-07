@@ -18,9 +18,9 @@ import path from 'path';
 
 import { GROUPS_DIR } from '../../config.js';
 import { createAgentGroup, getAgentGroup, getAgentGroupByFolder } from '../../db/agent-groups.js';
-import { getContainerConfig } from '../../db/container-configs.js';
+import { getContainerConfig, updateContainerConfigJson } from '../../db/container-configs.js';
 import { getSession } from '../../db/sessions.js';
-import { wakeContainer } from '../../container-runner.js';
+import { buildAgentGroupImage, wakeContainer } from '../../container-runner.js';
 import { initGroupFilesystem } from '../../group-init.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
@@ -145,8 +145,31 @@ async function performCreateAgent(
   // stamps its config row in one step (a NULL parent resolves to claude). The
   // operator can still flip a child later with `ncl groups config update
   // --provider`.
-  const parentProvider = getContainerConfig(sourceGroup.id)?.provider ?? 'claude';
+  const parentConfig = getContainerConfig(sourceGroup.id);
+  const parentProvider = parentConfig?.provider ?? 'claude';
   initGroupFilesystem(newGroup, { instructions: instructions ?? undefined, provider: parentProvider });
+
+  // Same reasoning as the provider inheritance above: a child should have the
+  // same tools its creator does by default, not a bare container it then has
+  // to re-request install_packages for. Building inline (awaited, not
+  // fire-and-forget) means the "Agent created" notification below is only
+  // sent once the child's image is actually ready with those packages —
+  // otherwise its first spawn would silently fall back to the base image.
+  if (parentConfig) {
+    const parentApt = JSON.parse(parentConfig.packages_apt ?? '[]') as string[];
+    const parentNpm = JSON.parse(parentConfig.packages_npm ?? '[]') as string[];
+    const parentPip = JSON.parse(parentConfig.packages_pip ?? '[]') as string[];
+    if (parentApt.length > 0 || parentNpm.length > 0 || parentPip.length > 0) {
+      if (parentApt.length > 0) updateContainerConfigJson(agentGroupId, 'packages_apt', parentApt);
+      if (parentNpm.length > 0) updateContainerConfigJson(agentGroupId, 'packages_npm', parentNpm);
+      if (parentPip.length > 0) updateContainerConfigJson(agentGroupId, 'packages_pip', parentPip);
+      try {
+        await buildAgentGroupImage(agentGroupId);
+      } catch (err) {
+        log.error('Failed to build inherited-package image for new sub-agent', { agentGroupId, err });
+      }
+    }
+  }
 
   // Insert bidirectional destination rows (= ACL grants).
   // Creator refers to child by the name it chose; child refers to creator as "parent".

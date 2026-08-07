@@ -19,19 +19,23 @@ import type { PendingApproval, Session } from '../../types.js';
 const {
   mockRequestApproval,
   mockGetContainerConfig,
+  mockUpdateContainerConfigJson,
   mockCreateAgentGroup,
   mockInitGroupFilesystem,
   mockWriteDestinations,
   mockNotifyWrite,
+  mockBuildAgentGroupImage,
   liveApprovals,
   approvalHandlers,
 } = vi.hoisted(() => ({
   mockRequestApproval: vi.fn().mockResolvedValue(undefined),
   mockGetContainerConfig: vi.fn(),
+  mockUpdateContainerConfigJson: vi.fn(),
   mockCreateAgentGroup: vi.fn(),
   mockInitGroupFilesystem: vi.fn(),
   mockWriteDestinations: vi.fn(),
   mockNotifyWrite: vi.fn(),
+  mockBuildAgentGroupImage: vi.fn().mockResolvedValue(undefined),
   liveApprovals: new Map<string, import('../../types.js').PendingApproval>(),
   approvalHandlers: new Map<string, (ctx: Record<string, unknown>) => Promise<void>>(),
 }));
@@ -45,6 +49,7 @@ vi.mock('../approvals/index.js', () => ({
 }));
 vi.mock('../../db/container-configs.js', () => ({
   getContainerConfig: (...a: unknown[]) => mockGetContainerConfig(...a),
+  updateContainerConfigJson: (...a: unknown[]) => mockUpdateContainerConfigJson(...a),
   ensureContainerConfig: () => {},
 }));
 vi.mock('../../db/agent-groups.js', () => ({
@@ -78,6 +83,7 @@ vi.mock('../../session-manager.js', () => ({
 }));
 vi.mock('../../container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
+  buildAgentGroupImage: (...a: unknown[]) => mockBuildAgentGroupImage(...a),
 }));
 vi.mock('../../db/sessions.js', () => ({
   getSession: (id: string) => ({ id, agent_group_id: 'ag-1' }),
@@ -169,6 +175,44 @@ describe('create_agent — guard-based authorization (wrapped delivery action)',
       expect.anything(),
       expect.objectContaining({ provider: 'claude' }),
     );
+  });
+
+  it('child inherits the creator apt/npm/pip packages and its image is built', async () => {
+    // Red-on-delete: dropping the inheritance leaves a child that can't use
+    // any tool its creator installed until someone manually re-runs
+    // install_packages for it — and even with the config copied, skipping
+    // the build means the child's first spawn silently falls back to the
+    // base image (packages_apt would lie about what's actually installed).
+    mockGetContainerConfig.mockReturnValue({
+      cli_scope: 'global',
+      packages_apt: '["gh"]',
+      packages_npm: '[]',
+      packages_pip: '[]',
+    });
+
+    await runCreateAgent({ name: 'Scout', instructions: 'help' });
+
+    expect(mockUpdateContainerConfigJson).toHaveBeenCalledWith(expect.any(String), 'packages_apt', ['gh']);
+    expect(mockUpdateContainerConfigJson).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'packages_npm',
+      expect.anything(),
+    );
+    expect(mockBuildAgentGroupImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('creator with no packages: does not touch config or build an image', async () => {
+    mockGetContainerConfig.mockReturnValue({
+      cli_scope: 'global',
+      packages_apt: '[]',
+      packages_npm: '[]',
+      packages_pip: '[]',
+    });
+
+    await runCreateAgent({ name: 'Scout', instructions: 'help' });
+
+    expect(mockUpdateContainerConfigJson).not.toHaveBeenCalled();
+    expect(mockBuildAgentGroupImage).not.toHaveBeenCalled();
   });
 
   it('group scope (default): requires approval, does NOT create directly', async () => {
