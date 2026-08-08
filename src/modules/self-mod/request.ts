@@ -124,6 +124,30 @@ function redactSecret(value: string): string {
 }
 
 /**
+ * Catches secret-shaped substrings *embedded within* a larger value — the
+ * shape that slipped through undetected in production: an MCP server whose
+ * auth token lives in a URL query parameter (`?userToken=eyJ...`), not in
+ * `env` or as its own bare arg. SECRET_VALUE_RE above only matches a known
+ * prefix anchored at the very start of the whole string, so a URL (which
+ * starts with "https://") never matched it even though the token buried
+ * inside it did. Query-param values are checked first since they should
+ * redact cleanly as one unit regardless of what's inside them (a JWT's
+ * internal dots, etc.); JWT/prefix checks catch tokens appearing bare or in
+ * a header value rather than a query string.
+ */
+const SUSPICIOUS_QUERY_PARAM_RE = /([?&](?:token|key|secret|password|auth|apikey|api_key)=)([^&\s]{12,})/gi;
+const JWT_RE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})*\b/g;
+const SECRET_PREFIX_ANYWHERE_RE = /(sk-|ghp_|github_pat_|xox[a-z]-|AKIA|-----BEGIN )[A-Za-z0-9+/_=.-]{8,}/gi;
+
+/** Redact secret-shaped substrings within a larger value, leaving the surrounding structure visible. */
+function redactEmbeddedSecrets(value: string): string {
+  return value
+    .replace(SUSPICIOUS_QUERY_PARAM_RE, (_m, prefix: string, val: string) => `${prefix}${redactSecret(val)}`)
+    .replace(JWT_RE, (m) => redactSecret(m))
+    .replace(SECRET_PREFIX_ANYWHERE_RE, (m) => redactSecret(m));
+}
+
+/**
  * Render every control/format/invisible/bidi character — and backtick, so a
  * payload can never close the card's code fence — as a visible \uXXXX
  * escape. Applied to JSON-encoded payload fields: JSON.stringify already
@@ -186,12 +210,15 @@ export async function requestAddMcpServerHold(content: Record<string, unknown>, 
   const env = (content.env as Record<string, string> | undefined) || {};
 
   // Card-only view: secret-shaped values render as redaction placeholders;
-  // the payload below keeps the verbatim values.
-  const displayArgs = args.map((a) => (SECRET_VALUE_RE.test(a) ? redactSecret(a) : a));
+  // the payload below keeps the verbatim values. Whole-value prefix matches
+  // redact the entire value (unchanged from before); everything else still
+  // gets checked for a secret-shaped substring embedded within it (a token
+  // in a URL query param, etc.) rather than passing through untouched.
+  const displayArgs = args.map((a) => (SECRET_VALUE_RE.test(a) ? redactSecret(a) : redactEmbeddedSecrets(a)));
   const displayEnv = Object.fromEntries(
     Object.entries(env).map(([k, v]) => [
       k,
-      SECRET_ENV_KEY_RE.test(k) || SECRET_VALUE_RE.test(v) ? redactSecret(v) : v,
+      SECRET_ENV_KEY_RE.test(k) || SECRET_VALUE_RE.test(v) ? redactSecret(v) : redactEmbeddedSecrets(v),
     ]),
   );
 

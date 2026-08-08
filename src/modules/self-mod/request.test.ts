@@ -369,6 +369,38 @@ describe('add_mcp_server secret redaction', () => {
     expect(payload.env.GITHUB_TOKEN).toBe(keyMatched);
     expect(payload.env.HARMLESS).toBe(valueMatched);
   });
+
+  // Regression test for a real production incident: a Penpot MCP server was
+  // added with its auth token embedded in a URL query parameter
+  // (?userToken=<JWE>). The whole-value, start-anchored SECRET_VALUE_RE never
+  // matched — the arg starts with "https://", not a known secret prefix — so
+  // the real token rendered in plain text on the Discord approval card and
+  // the approver couldn't have known to reject it.
+  it('redacts a token embedded in a URL query parameter, not just whole-value secrets', async () => {
+    const jwe =
+      'eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.d3U3LJYi7qwH2c1Z0LrE9RZh-sxJxbsRUmPAVkERAxKfqItdWgYh0w.z53QLVbPLLpNgcR6.B7qxUXo9UVy4ET3n5DD8QqFVihYLepiNVHwtRIgph8Z6YM7mZcxmoUETYbJkkiUAq67K5sw4QKdROWn1TJnZtJTQNOqHYSsKgVGHZ_KkKiE3jefgB7T39C0fTW59AxjB7chIIIy2TssinFSeo50GwK_f5XQCTUFZfpkZP2DpQs4ZXfIUU0wEEsFXRylUtkArEh6ElM7OfM08.e2TQFBHfb-ALESOPky4ncg';
+    const url = `https://design.penpot.app/mcp/stream?userToken=${jwe}`;
+    await submitAddMcpServer({ name: 'penpot', command: 'npx', args: ['-y', 'mcp-remote', url] }, session);
+
+    const question = lastQuestion();
+    expect(question).not.toContain(jwe);
+    // The surrounding URL structure stays visible — only the token is hidden.
+    expect(question).toContain('https://design.penpot.app/mcp/stream?userToken=');
+    expect(question).toContain(redactedForm(jwe));
+  });
+
+  it('redacts a bare JWT-shaped value even outside a query string', async () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+    await submitAddMcpServer(
+      { name: 'safe2', command: 'node', args: ['--header', `Authorization: Bearer ${jwt}`] },
+      session,
+    );
+
+    const question = lastQuestion();
+    expect(question).not.toContain(jwt);
+    expect(question).toContain('Authorization: Bearer');
+    expect(question).toContain(redactedForm(jwt));
+  });
 });
 
 describe('escapeInvisibles', () => {
