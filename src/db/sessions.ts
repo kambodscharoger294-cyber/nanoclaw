@@ -183,6 +183,30 @@ export function deletePendingQuestion(questionId: string): void {
   getDb().prepare('DELETE FROM pending_questions WHERE question_id = ?').run(questionId);
 }
 
+/**
+ * Most recent pending question addressed to a given channel/platform/thread.
+ * Used by adapters that have no native button UI (e.g. the CLI channel) to
+ * figure out which pending card a plain-text reply is answering.
+ */
+export function getLatestPendingQuestionForChannel(
+  channelType: string,
+  platformId: string,
+  threadId: string | null,
+): PendingQuestion | undefined {
+  const row = getDb()
+    .prepare(
+      `SELECT * FROM pending_questions
+       WHERE channel_type = ? AND platform_id = ? AND thread_id IS ?
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(channelType, platformId, threadId) as
+    | (Omit<PendingQuestion, 'options'> & { options_json: string })
+    | undefined;
+  if (!row) return undefined;
+  const { options_json, ...rest } = row;
+  return { ...rest, options: JSON.parse(options_json) };
+}
+
 // ── Pending Approvals ──
 
 /**
@@ -231,6 +255,46 @@ export function getPendingApproval(approvalId: string): PendingApproval | undefi
 
 export function updatePendingApprovalStatus(approvalId: string, status: PendingApproval['status']): void {
   getDb().prepare('UPDATE pending_approvals SET status = ? WHERE approval_id = ?').run(status, approvalId);
+}
+
+/**
+ * Most recent pending approval this user is authorized to resolve — owner,
+ * global admin, or scoped admin of the approval's agent group (falling back
+ * to the requesting session's agent group, same as an approval row with no
+ * agent_group_id of its own), or the row's named approver. Mirrors
+ * isAuthorizedApprovalClick in modules/approvals/response-handler.ts.
+ *
+ * Used by adapters with no button UI (the CLI channel) to let an admin
+ * resolve any pending card from a console, independent of which channel it
+ * was actually delivered to — a button click carries its own authorization
+ * implicitly (the platform already gated who could see/press it); a typed
+ * reply needs this explicit check instead.
+ */
+export function getLatestPendingApprovalApprovableBy(userId: string): PendingApproval | undefined {
+  const db = getDb();
+  const isOwnerOrGlobalAdmin = !!db
+    .prepare(`SELECT 1 FROM user_roles WHERE user_id = ? AND role IN ('owner', 'admin') AND agent_group_id IS NULL`)
+    .get(userId);
+  if (isOwnerOrGlobalAdmin) {
+    return db
+      .prepare(`SELECT * FROM pending_approvals WHERE status = 'pending' ORDER BY created_at DESC LIMIT 1`)
+      .get() as PendingApproval | undefined;
+  }
+  return db
+    .prepare(
+      `SELECT pa.* FROM pending_approvals pa
+       LEFT JOIN sessions s ON s.id = pa.session_id
+       WHERE pa.status = 'pending'
+         AND (
+           pa.approver_user_id = @userId
+           OR COALESCE(pa.agent_group_id, s.agent_group_id) IN (
+             SELECT agent_group_id FROM user_roles
+             WHERE user_id = @userId AND role = 'admin' AND agent_group_id IS NOT NULL
+           )
+         )
+       ORDER BY pa.created_at DESC LIMIT 1`,
+    )
+    .get({ userId }) as PendingApproval | undefined;
 }
 
 /**

@@ -38,6 +38,7 @@ import net from 'net';
 import path from 'path';
 
 import { DATA_DIR } from '../config.js';
+import { getLatestPendingApprovalApprovableBy, getLatestPendingQuestionForChannel } from '../db/sessions.js';
 import { log } from '../log.js';
 import type {
   ChannelAdapter,
@@ -47,6 +48,7 @@ import type {
   InboundEvent,
   OutboundMessage,
 } from './adapter.js';
+import { normalizeOptions, type NormalizedOption, type RawOption } from './ask-question.js';
 import { registerChannelAdapter } from './channel-registry.js';
 
 const PLATFORM_ID = 'local';
@@ -184,7 +186,7 @@ function createAdapter(): ChannelAdapter {
         const line = buffer.slice(0, idx).trim();
         buffer = buffer.slice(idx + 1);
         if (!line) continue;
-        void handleLine(line, config, claimChatSlot);
+        void handleLine(line, config, claimChatSlot, socket);
       }
     });
 
@@ -198,7 +200,12 @@ function createAdapter(): ChannelAdapter {
     });
   }
 
-  async function handleLine(line: string, config: ChannelSetup, claimChatSlot: () => void): Promise<void> {
+  async function handleLine(
+    line: string,
+    config: ChannelSetup,
+    claimChatSlot: () => void,
+    socket: net.Socket,
+  ): Promise<void> {
     let payload: {
       text?: unknown;
       to?: unknown;
@@ -245,6 +252,55 @@ function createAdapter(): ChannelAdapter {
       return;
     }
 
+    // Before treating this as a normal chat turn, check whether it's actually
+    // answering a pending ask_question card — the CLI has no buttons, so a
+    // typed number/label stands in for a click. Two tables can hold the
+    // pending card: pending_approvals (requestApproval — install_packages,
+    // cli_command, etc., delivered by a direct adapter.deliver() call, which
+    // may have gone to a different channel entirely — the CLI console can
+    // still resolve anything its operator is authorized for) and
+    // pending_questions (the container's ask_user_question tool, delivered
+    // through the outbound.db poll loop, always addressed to this channel).
+    // Approvals checked first since they're the more common admin-facing case.
+    const approval = getLatestPendingApprovalApprovableBy(`cli:${PLATFORM_ID}`);
+    if (approval) {
+      // options_json is already normalized (primitive.ts stores it post-normalizeOptions).
+      const selected = matchPendingQuestionReply(payload.text, JSON.parse(approval.options_json) as NormalizedOption[]);
+      if (selected) {
+        // No other trace of this exists: matching an approval deliberately
+        // skips claimChatSlot() and onInbound(), so nothing lands in
+        // messages_in or the "CLI client connected" log. This line is the
+        // only audit record of who/what resolved the card and with what text.
+        log.info('CLI reply resolved pending approval', {
+          approvalId: approval.approval_id,
+          title: approval.title,
+          rawText: payload.text,
+          selected: selected.value,
+        });
+        config.onAction(approval.approval_id, selected.value, `cli:${PLATFORM_ID}`);
+        // chat.ts (and any other one-shot caller) blocks waiting for a reply
+        // on this same socket — onAction is fire-and-forget from here, so
+        // acknowledge immediately rather than leaving the caller to time out.
+        writeLine(socket, `${selected.selectedLabel}: ${approval.title}`);
+        return;
+      }
+    }
+    const pq = getLatestPendingQuestionForChannel('cli', PLATFORM_ID, null);
+    if (pq) {
+      const selected = matchPendingQuestionReply(payload.text, pq.options);
+      if (selected) {
+        log.info('CLI reply resolved pending question', {
+          questionId: pq.question_id,
+          title: pq.title,
+          rawText: payload.text,
+          selected: selected.value,
+        });
+        config.onAction(pq.question_id, selected.value, `cli:${PLATFORM_ID}`);
+        writeLine(socket, `${selected.selectedLabel}: ${pq.title}`);
+        return;
+      }
+    }
+
     // Plain chat — claim the slot (evicting any prior client) and route via
     // the standard onInbound path (adapter injects its own channelType).
     claimChatSlot();
@@ -261,6 +317,31 @@ function createAdapter(): ChannelAdapter {
       });
     } catch (err) {
       log.error('CLI: onInbound threw', { err });
+    }
+  }
+
+  /**
+   * Match a typed reply against a pending question's options: 1-indexed
+   * position ("1"), or a case-insensitive label/value match ("approve").
+   * Returns the matched option, or null if the text doesn't match anything —
+   * callers fall back to treating it as normal chat.
+   */
+  function matchPendingQuestionReply(text: string, options: NormalizedOption[]): NormalizedOption | null {
+    const trimmed = text.trim();
+    const asIndex = Number(trimmed);
+    if (Number.isInteger(asIndex) && asIndex >= 1 && asIndex <= options.length) {
+      return options[asIndex - 1];
+    }
+    const lower = trimmed.toLowerCase();
+    return options.find((opt) => opt.label.toLowerCase() === lower || opt.value.toLowerCase() === lower) ?? null;
+  }
+
+  /** Write one `{text}` line to a client socket, swallowing write errors (client may have gone away). */
+  function writeLine(socket: net.Socket, text: string): void {
+    try {
+      socket.write(JSON.stringify({ text }) + '\n');
+    } catch (err) {
+      log.warn('Failed to write to CLI client', { err });
     }
   }
 
@@ -287,10 +368,25 @@ function createAdapter(): ChannelAdapter {
 function extractText(message: OutboundMessage): string | null {
   const content = message.content as Record<string, unknown> | string | undefined;
   if (typeof content === 'string') return content;
-  if (content && typeof content === 'object' && typeof content.text === 'string') {
-    return content.text;
+  if (content && typeof content === 'object') {
+    if (content.type === 'ask_question') return formatAskQuestion(content);
+    if (typeof content.text === 'string') return content.text;
   }
   return null;
+}
+
+/**
+ * The CLI channel has no button UI, so render an ask_question card (approval
+ * requests, ask_user_question) as plain numbered text. handleLine's reply
+ * matching (below) turns a typed number back into the option's value.
+ */
+function formatAskQuestion(content: Record<string, unknown>): string {
+  const title = typeof content.title === 'string' ? content.title : '';
+  const question = typeof content.question === 'string' ? content.question : '';
+  const options = normalizeOptions(Array.isArray(content.options) ? (content.options as RawOption[]) : []);
+  const numbered = options.map((opt, idx) => `${idx + 1}) ${opt.label}`).join('\n');
+  const body = [title, question].filter(Boolean).join('\n\n');
+  return `${body}\n\n${numbered}\n\nReply with the number to answer.`;
 }
 
 registerChannelAdapter('cli', { factory: createAdapter, defaults: CLI_DEFAULTS });
