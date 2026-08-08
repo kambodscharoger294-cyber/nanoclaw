@@ -677,7 +677,7 @@ function startLocalWebhookServer(
   });
 }
 
-async function handleForwardedEvent(
+export async function handleForwardedEvent(
   body: string,
   adapter: GatewayAdapter,
   setupConfig: ChannelSetup,
@@ -703,14 +703,23 @@ async function handleForwardedEvent(
       const interactionId = interaction.id as string;
       const interactionToken = interaction.token as string;
 
-      // Parse the selected option from custom_id
+      // Parse the selected option from custom_id. Discord's own adapter joins
+      // the button's id and value with a newline (DISCORD_CUSTOM_ID_DELIMITER)
+      // when the value is non-empty — e.g. "ncq:<questionId>:<idx>\n<idx>".
+      // Split on that first, or the trailing "\n<idx>" ends up glued onto the
+      // tail and never matches resolveSelectedOption's numeric-index check,
+      // so every click falls through to a raw, unrecognized string — which
+      // downstream treats as a rejection regardless of which button was hit.
       let questionId: string | undefined;
       let tail: string | undefined;
-      if (customId?.startsWith('ncq:')) {
-        const colonIdx = customId.indexOf(':', 4); // after "ncq:"
+      const delimIdx = customId?.indexOf('\n') ?? -1;
+      const idPart = delimIdx === -1 ? customId : customId?.slice(0, delimIdx);
+      const valuePart = delimIdx === -1 ? undefined : customId?.slice(delimIdx + 1);
+      if (idPart?.startsWith('ncq:')) {
+        const colonIdx = idPart.indexOf(':', 4); // after "ncq:"
         if (colonIdx !== -1) {
-          questionId = customId.slice(4, colonIdx);
-          tail = customId.slice(colonIdx + 1);
+          questionId = idPart.slice(4, colonIdx);
+          tail = valuePart ?? idPart.slice(colonIdx + 1);
         }
       }
 

@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Adapter, AdapterPostableMessage, RawMessage } from 'chat';
 
-import { createChatSdkBridge, splitForLimit } from './chat-sdk-bridge.js';
+import { createChatSdkBridge, handleForwardedEvent, splitForLimit } from './chat-sdk-bridge.js';
 
 vi.mock('../webhook-server.js', () => ({
   registerWebhookAdapter: vi.fn(),
+}));
+
+vi.mock('../db/sessions.js', () => ({
+  getAskQuestionRender: vi.fn(),
 }));
 
 function stubAdapter(partial: Partial<Adapter>): Adapter {
@@ -51,6 +55,82 @@ describe('splitForLimit', () => {
     expect(chunks.length).toBe(Math.ceil(100 / 30));
     for (const c of chunks) expect(c.length).toBeLessThanOrEqual(30);
     expect(chunks.join('')).toBe(text);
+  });
+});
+
+describe('handleForwardedEvent — Discord button interactions', () => {
+  // Regression test for a real production bug: Discord's own adapter joins a
+  // button's id and value with "\n" in the raw custom_id (e.g.
+  // "ncq:<questionId>:0\n0"). This handler exists because the vendored
+  // @chat-adapter/discord package never routes GATEWAY_INTERACTION_CREATE
+  // anywhere — so it has to parse custom_id itself. A naive colon-split left
+  // the trailing "\n0" glued onto the parsed value ("0\n0"), which never
+  // matched resolveSelectedOption's numeric-index check and fell through to
+  // a raw, unrecognized string — which every caller treats as a rejection.
+  // Net effect: every Discord approval button click resolved as "reject",
+  // regardless of which button was actually clicked.
+  let getAskQuestionRender: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    ({ getAskQuestionRender } = (await import('../db/sessions.js')) as unknown as {
+      getAskQuestionRender: ReturnType<typeof vi.fn>;
+    });
+    getAskQuestionRender.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function discordInteractionBody(customId: string) {
+    return JSON.stringify({
+      type: 'GATEWAY_INTERACTION_CREATE',
+      data: {
+        type: 3,
+        id: 'interaction-1',
+        token: 'interaction-token',
+        data: { custom_id: customId },
+        user: { id: 'discord-user-1', username: 'freitag' },
+        message: { embeds: [{ title: 'Approve?', description: 'desc' }] },
+      },
+    });
+  }
+
+  it('resolves the Approve button (index 0) as "approve", not a raw index string', async () => {
+    getAskQuestionRender.mockReturnValue({
+      title: 'Install packages?',
+      question: 'Approve installing pymupdf?',
+      options: [
+        { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
+        { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
+      ],
+    });
+    const onAction = vi.fn();
+    const setupConfig = { onAction } as unknown as import('./adapter.js').ChannelSetup;
+    const adapter = { name: 'discord' } as unknown as Parameters<typeof handleForwardedEvent>[1];
+
+    await handleForwardedEvent(discordInteractionBody('ncq:appr-test-1:0\n0'), adapter, setupConfig);
+
+    expect(onAction).toHaveBeenCalledWith('appr-test-1', 'approve', 'discord-user-1');
+  });
+
+  it('resolves the Reject button (index 1) as "reject"', async () => {
+    getAskQuestionRender.mockReturnValue({
+      title: 'Install packages?',
+      question: 'Approve installing pymupdf?',
+      options: [
+        { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
+        { label: 'Reject', selectedLabel: '❌ Rejected', value: 'reject' },
+      ],
+    });
+    const onAction = vi.fn();
+    const setupConfig = { onAction } as unknown as import('./adapter.js').ChannelSetup;
+    const adapter = { name: 'discord' } as unknown as Parameters<typeof handleForwardedEvent>[1];
+
+    await handleForwardedEvent(discordInteractionBody('ncq:appr-test-1:1\n1'), adapter, setupConfig);
+
+    expect(onAction).toHaveBeenCalledWith('appr-test-1', 'reject', 'discord-user-1');
   });
 });
 
