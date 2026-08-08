@@ -435,6 +435,45 @@ async function transcribeAudioOptional(filePath: string): Promise<string | null>
   return null;
 }
 
+interface SignalFileEntry {
+  type: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+  data: string;
+}
+
+/**
+ * Read non-audio attachment bytes off disk and shape them for the generic
+ * inbound-attachment mechanism (extractAttachmentFiles in session-manager.ts)
+ * — the same one every other channel uses to land files in the session's
+ * mounted inbox. Shared by both envelope shapes that carry attachments
+ * (regular dataMessage and syncMessage.sentMessage/Note-to-Self) so a fix
+ * here never has to be duplicated — and re-forgotten — a second time.
+ */
+function readFileEntries(
+  attachments: NonNullable<SignalDataMessage['attachments']>,
+  signalDataDir: string,
+): SignalFileEntry[] {
+  const entries: SignalFileEntry[] = [];
+  for (const file of attachments) {
+    if (!file.id) continue;
+    const hostPath = join(signalDataDir, 'attachments', file.id);
+    if (!existsSync(hostPath)) {
+      log.warn('Signal: attachment file not found', { id: file.id, path: hostPath });
+      continue;
+    }
+    entries.push({
+      type: file.contentType?.startsWith('image/') ? 'image' : 'file',
+      name: file.filename,
+      mimeType: file.contentType,
+      size: file.size,
+      data: readFileSync(hostPath).toString('base64'),
+    });
+  }
+  return entries;
+}
+
 function chunkText(text: string, limit: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
@@ -526,35 +565,6 @@ function parseSignalStyles(input: string): StyledText {
   return { text, textStyles: styles };
 }
 
-/**
- * Read image/document attachments off disk and hand them off as inline
- * base64 `data`. signal-cli downloads attachments to a host-only path
- * (never mounted into any container) — the router's writeSessionMessage →
- * extractAttachmentFiles (session-manager.ts) is the ONE place across every
- * channel that saves inline `data` into the session's own mounted inbox dir
- * and rewrites it to a container-visible `localPath`. A host filesystem
- * path handed straight to the agent would never resolve inside its container.
- */
-function readSignalAttachments(
-  attachments: Array<{ id?: string; contentType?: string; filename?: string }>,
-  signalDataDir: string,
-): Array<{ name?: string; mimeType?: string; data: string }> {
-  const refs: Array<{ name?: string; mimeType?: string; data: string }> = [];
-  for (const att of attachments) {
-    const attPath = join(signalDataDir, 'attachments', att.id!);
-    if (!existsSync(attPath)) {
-      log.warn('Signal: attachment file not found', { id: att.id, path: attPath });
-      continue;
-    }
-    refs.push({
-      name: att.filename,
-      mimeType: att.contentType,
-      data: readFileSync(attPath).toString('base64'),
-    });
-  }
-  return refs;
-}
-
 // ---------------------------------------------------------------------------
 // SignalAdapter — v2 ChannelAdapter implementation
 // ---------------------------------------------------------------------------
@@ -604,33 +614,52 @@ export function createSignalAdapter(config: {
       // "Note to Self" — destination is our own account
       if (dest === config.account) {
         const text = (syncSent.message ?? '').trim();
-        const imageAttachments = syncSent.attachments?.filter((a) => a.contentType?.startsWith('image/') && a.id) ?? [];
-        const documentAttachments =
-          syncSent.attachments?.filter(
-            (a) => a.id && !a.contentType?.startsWith('image/') && !a.contentType?.startsWith('audio/'),
-          ) ?? [];
-        if (!text && imageAttachments.length === 0 && documentAttachments.length === 0) return;
+
+        // Note-to-self attachments arrive on this same envelope shape
+        // (sentMessage extends SignalDataMessage) but historically were never
+        // read here — a captionless image or PDF sent to yourself vanished
+        // silently, unlike the regular dataMessage path below. Mirror that
+        // path's handling exactly so the two don't drift apart again.
+        const audioAttachment = syncSent.attachments?.find((a) => a.contentType?.startsWith('audio/') && a.id);
+        const fileAttachments = syncSent.attachments?.filter((a) => !a.contentType?.startsWith('audio/') && a.id) ?? [];
+        const hasVoice = !text && !!audioAttachment;
+
+        if (!text && !hasVoice && fileAttachments.length === 0) return;
+
         const platformId = config.account;
         if (text && echoCache.isEcho(platformId, text)) return;
         const timestamp = syncSent.timestamp ? new Date(syncSent.timestamp).toISOString() : new Date().toISOString();
 
         setup.onMetadata(platformId, 'Note to Self', false);
 
-        const attachmentRefs = readSignalAttachments(
-          [...imageAttachments, ...documentAttachments],
-          config.signalDataDir,
-        );
+        let content = text;
+
+        if (hasVoice && audioAttachment?.id) {
+          const attachmentPath = join(config.signalDataDir, 'attachments', audioAttachment.id);
+          if (existsSync(attachmentPath)) {
+            const transcript = await transcribeAudioOptional(attachmentPath);
+            content = transcript ? `[Voice: ${transcript}]` : '[Voice Message]';
+          } else {
+            log.warn('Signal: voice attachment file not found', { id: audioAttachment.id, path: attachmentPath });
+            content = '[Voice Message - file not found]';
+          }
+        }
+
+        const fileEntries = readFileEntries(fileAttachments, config.signalDataDir);
+        if (!content && fileAttachments.length > 0 && fileEntries.length === 0) {
+          content = '[Attachment not found]';
+        }
 
         const msg: InboundMessage = {
           id: String(syncSent.timestamp ?? Date.now()),
           kind: 'chat',
           content: {
-            text,
+            text: content,
             sender: config.account,
             senderId: `signal:${config.account}`,
             senderName: 'Me',
             isFromMe: true,
-            ...(attachmentRefs.length > 0 ? { attachments: attachmentRefs } : {}),
+            ...(fileEntries.length > 0 ? { attachments: fileEntries } : {}),
             ...(syncSent.quote ? quoteToContent(syncSent.quote) : {}),
           },
           // Note-to-self is a DM with ourselves: same DM→mention rule.
@@ -652,17 +681,10 @@ export function createSignalAdapter(config: {
     const text = rawText ? resolveMentions(rawText, dataMessage.mentions) : '';
 
     const audioAttachment = dataMessage.attachments?.find((a) => a.contentType?.startsWith('audio/') && a.id);
-    const imageAttachments = dataMessage.attachments?.filter((a) => a.contentType?.startsWith('image/') && a.id) ?? [];
-    // Everything else (PDFs, spreadsheets, archives, ...) — signal-cli downloads
-    // any attachment type regardless of MIME; only image/audio got surfaced
-    // before, so a document sent alone (no caption) silently vanished.
-    const documentAttachments =
-      dataMessage.attachments?.filter(
-        (a) => a.id && !a.contentType?.startsWith('image/') && !a.contentType?.startsWith('audio/'),
-      ) ?? [];
+    const fileAttachments = dataMessage.attachments?.filter((a) => !a.contentType?.startsWith('audio/') && a.id) ?? [];
     const hasVoice = !text && !!audioAttachment;
 
-    if (!text && !hasVoice && imageAttachments.length === 0 && documentAttachments.length === 0) return;
+    if (!text && !hasVoice && fileAttachments.length === 0) return;
 
     const sender = (envelope.sourceNumber ?? envelope.sourceUuid ?? envelope.source ?? '').trim();
     if (!sender) return;
@@ -717,7 +739,24 @@ export function createSignalAdapter(config: {
       }
     }
 
-    const attachmentRefs = readSignalAttachments([...imageAttachments, ...documentAttachments], config.signalDataDir);
+    // Non-audio attachments (images, documents, etc.) — read the bytes and
+    // hand them to the generic inbound-attachment mechanism
+    // (extractAttachmentFiles in session-manager.ts), same as every other
+    // channel. That writes the bytes into the session's inbox dir, which
+    // *is* mounted into the container, so the agent's Read tool can
+    // actually open the file. The previous approach spliced a
+    // `/workspace/extra/signal-attachments/<id>` path directly into the
+    // message text — a path that was never mounted anywhere, so it always
+    // failed, and it silently dropped any non-image, non-audio attachment
+    // (documents, text files, etc.) entirely.
+    const fileEntries = readFileEntries(fileAttachments, config.signalDataDir);
+
+    // All attachments failed to read (e.g. signal-cli hadn't finished
+    // downloading yet) and there's no other text — say so instead of
+    // silently delivering an empty message, mirroring the voice fallback.
+    if (!content && fileAttachments.length > 0 && fileEntries.length === 0) {
+      content = '[Attachment not found]';
+    }
 
     const msg: InboundMessage = {
       id: String(dataMessage.timestamp ?? Date.now()),
@@ -727,7 +766,7 @@ export function createSignalAdapter(config: {
         sender,
         senderId: `signal:${sender}`,
         senderName,
-        ...(attachmentRefs.length > 0 ? { attachments: attachmentRefs } : {}),
+        ...(fileEntries.length > 0 ? { attachments: fileEntries } : {}),
         ...(dataMessage.quote ? quoteToContent(dataMessage.quote) : {}),
       },
       isMention: computeSignalIsMention(config.account, isGroup, dataMessage.mentions),
@@ -881,15 +920,7 @@ export function createSignalAdapter(config: {
         const ready = await waitForDaemon();
         if (!ready) {
           daemon.stop();
-          // Tagged NetworkError (not a hard misconfig) so initChannelAdapters
-          // retries it: right after a machine reboot, signal-cli's JVM start
-          // or its dependencies (network, D-Bus) can lose the 30s race in
-          // waitForDaemon even though the setup is otherwise fine. Without
-          // this, one slow boot permanently kills the Signal channel until
-          // the whole host process is restarted.
-          const err = new Error('Signal daemon failed to start. Is signal-cli installed and your account linked?');
-          (err as any).name = 'NetworkError';
-          throw err;
+          throw new Error('Signal daemon failed to start. Is signal-cli installed and your account linked?');
         }
       } else {
         const ok = await signalTcpCheck(config.tcpHost, config.tcpPort);
