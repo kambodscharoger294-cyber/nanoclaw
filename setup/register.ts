@@ -295,12 +295,14 @@ export async function run(args: string[]): Promise<void> {
     );
     writeSessionMessage(agentGroup.id, session.id, {
       id: generateId('onboard'),
-      kind: 'task',
+      kind: 'chat',
       timestamp: new Date().toISOString(),
       platformId: parsed.platformId,
       channelType: parsed.channel,
       content: JSON.stringify({
-        prompt: `A new ${parsed.channel} channel has been connected. Run /welcome to introduce yourself to the user.`,
+        text: `A new ${parsed.channel} channel has been connected. Run /welcome to introduce yourself to the user.`,
+        sender: 'system',
+        senderId: 'system',
       }),
     });
     log.info('Onboarding message written', { sessionId: session.id, channel: parsed.channel });
