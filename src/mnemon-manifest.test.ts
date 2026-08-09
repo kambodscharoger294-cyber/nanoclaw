@@ -24,9 +24,7 @@ function repoRoot(): string {
 
 describe('mnemon is installed via container/cli-tools.json', () => {
   const root = repoRoot();
-  const manifest = JSON.parse(
-    fs.readFileSync(path.join(root, 'container', 'cli-tools.json'), 'utf8'),
-  ) as Array<{
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'container', 'cli-tools.json'), 'utf8')) as Array<{
     name: string;
     version: string;
     source?: string;
