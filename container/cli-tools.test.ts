@@ -13,6 +13,10 @@ const manifest = JSON.parse(readFileSync(join(here, 'cli-tools.json'), 'utf8')) 
   name: string;
   version: string;
   onlyBuilt?: boolean;
+  source?: 'npm' | 'github-release';
+  repo?: string;
+  asset?: string;
+  binary?: string;
 }>;
 const dockerfile = readFileSync(join(here, 'Dockerfile'), 'utf8');
 const installer = readFileSync(join(here, 'install-cli-tools.sh'), 'utf8');
@@ -65,8 +69,21 @@ describe('cli-tools manifest', () => {
     expect(dockerfile).toMatch(/install-cli-tools\.sh \/tmp\/cli-tools\.json/);
   });
 
-  it('installs via pnpm and writes only-built opt-ins (preserves the supply-chain path)', () => {
+  it('installs npm-sourced tools via pnpm and writes only-built opt-ins (preserves the supply-chain path)', () => {
     expect(installer).toMatch(/pnpm install -g/);
     expect(installer).toMatch(/only-built-dependencies\[\]=/);
+  });
+
+  it('installs github-release-sourced tools as pinned binary tarballs', () => {
+    expect(installer).toMatch(/source.*github-release/);
+    expect(installer).toMatch(/dpkg --print-architecture/);
+    expect(installer).toMatch(/releases\/download\/v\$VERSION/);
+  });
+
+  it('every github-release entry has the fields the installer needs', () => {
+    for (const tool of manifest.filter((t) => t.source === 'github-release')) {
+      expect(tool.repo, `${tool.name}.repo`).toMatch(/^[^/\s]+\/[^/\s]+$/);
+      expect(tool.asset, `${tool.name}.asset`).toContain('{version}');
+    }
   });
 });

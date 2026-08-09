@@ -8,5 +8,12 @@
     "name": "@anthropic-ai/claude-code",
     "version": "2.1.197",
     "onlyBuilt": true
+  },
+  {
+    "name": "mnemon",
+    "version": "0.1.17",
+    "source": "github-release",
+    "repo": "mnemon-dev/mnemon",
+    "asset": "mnemon_{version}_linux_{arch}.tar.gz"
   }
 ]

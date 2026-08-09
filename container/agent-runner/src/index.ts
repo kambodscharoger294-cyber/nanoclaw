@@ -28,6 +28,7 @@ import { fileURLToPath } from 'url';
 import { loadConfig } from './config.js';
 import { buildSystemPromptAddendum } from './destinations.js';
 import { getTaskSeriesId } from './db/session-routing.js';
+import { ensureMnemonSetup } from './memory/mnemon-setup.js';
 import { ensureMemoryScaffold } from './memory/scaffold.js';
 import { MEMORY_SESSION_HOOK } from './memory/session-hook.js';
 import { withGatewayEnv } from './mcp-gateway-env.js';
@@ -52,6 +53,10 @@ async function main(): Promise<void> {
   // Every provider shares one persistent memory tree. Legacy imports are an
   // operator-run migration and never happen in this normal startup path.
   ensureMemoryScaffold();
+
+  // Optional: mnemon's Claude Code hooks, if the binary is present (added via
+  // container/cli-tools.json). No-ops when absent.
+  ensureMnemonSetup(log);
 
   // Runtime-generated system-prompt addendum: agent identity (name) plus
   // the live destinations map. Everything else (capabilities, per-module

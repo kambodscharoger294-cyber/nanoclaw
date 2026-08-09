@@ -98,10 +98,11 @@ ENV PATH="$PNPM_HOME:$PATH"
 ARG PNPM_VERSION=10.33.0
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
-# Global Node CLIs the agent invokes at runtime live in cli-tools.json so a
-# skill can add one with a json-merge instead of editing this Dockerfile.
-# install-cli-tools.sh installs each via pnpm (pinned), writing the per-tool
-# only-built-dependencies opt-ins it reads from the manifest.
+# Global CLIs the agent invokes at runtime live in cli-tools.json so a skill
+# can add one with a json-merge instead of editing this Dockerfile.
+# install-cli-tools.sh installs each npm-sourced tool via pnpm (pinned,
+# writing the per-tool only-built-dependencies opt-ins) and each
+# github-release-sourced tool as a pinned binary tarball.
 COPY cli-tools.json install-cli-tools.sh /tmp/
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     sh /tmp/install-cli-tools.sh /tmp/cli-tools.json

@@ -2,43 +2,50 @@
 
 Every step is idempotent — safe to run even if some steps were never applied.
 
-## 1. Strip the Dockerfile install layer
+## 1. Strip the cli-tools.json manifest entry
 
-Open `container/Dockerfile` and delete the mnemon block (the `# ---- mnemon` comment, the `ARG MNEMON_VERSION`, the `RUN` that downloads the binary, and the `ENV MNEMON_DATA_DIR` line):
+Open `container/cli-tools.json` and delete the `mnemon` entry:
 
-```dockerfile
-# ---- mnemon — persistent agent memory ----------------------------------------
-ARG MNEMON_VERSION=0.1.1
-RUN ARCH=$(dpkg --print-architecture) && \
-    curl -fsSL "https://github.com/mnemon-dev/mnemon/releases/download/v${MNEMON_VERSION}/mnemon_${MNEMON_VERSION}_linux_${ARCH}.tar.gz" \
-    | tar -xz -C /usr/local/bin mnemon && \
-    chmod +x /usr/local/bin/mnemon
-
-ENV MNEMON_DATA_DIR=/home/node/.claude/mnemon
+```json
+{
+  "name": "mnemon",
+  "version": "0.1.17",
+  "source": "github-release",
+  "repo": "mnemon-dev/mnemon",
+  "asset": "mnemon_{version}_linux_{arch}.tar.gz"
+}
 ```
 
-If the block is already gone, skip this step.
+If the entry is already gone, skip this step.
 
-## 2. Strip the entrypoint setup line
+## 2. Remove the startup hook
 
-Open `container/entrypoint.sh` and delete the `mnemon setup` line that follows `set -e`:
+Delete `container/agent-runner/src/memory/mnemon-setup.ts` and
+`container/agent-runner/src/memory/mnemon-setup.test.ts`, then remove the import and call from
+`container/agent-runner/src/index.ts`:
 
-```bash
-mnemon setup --target claude-code --yes --global >/dev/stderr 2>&1
+```ts
+import { ensureMnemonSetup } from './memory/mnemon-setup.js';
 ```
 
-If the line is already gone, skip this step.
+```ts
+  // Optional: mnemon's Claude Code hooks, if the binary is present (added via
+  // container/cli-tools.json). No-ops when absent.
+  ensureMnemonSetup(log);
+```
 
-## 3. Delete the copied test files
+If any of these are already gone, skip that part.
+
+## 3. Delete the copied manifest test
 
 ```bash
-rm -f src/mnemon-dockerfile.test.ts src/mnemon-entrypoint.test.ts
+rm -f src/mnemon-manifest.test.ts
 ```
 
 ## 4. Rebuild and restart
 
 ```bash
-pnpm run build && ./container/build.sh
+./container/build.sh
 source setup/lib/install-slug.sh
 
 # macOS
@@ -48,9 +55,14 @@ launchctl kickstart -k gui/$(id -u)/$(launchd_label)
 systemctl --user restart $(systemd_unit)
 ```
 
+On a hardened-image install, the next `./container/build.sh` (or `/update-nanoclaw`'s refresh)
+naturally drops mnemon once the manifest entry is gone — it re-applies `cli-tools.json` from
+scratch rather than removing individual tools.
+
 ## 5. Delete stored memory (optional)
 
-Mnemon's graph lives at `/home/node/.claude/mnemon/` in each container, which maps to the per-agent-group `.claude/` directory on the host. To find the host path and clear it:
+Mnemon's graph lives at `/home/node/.claude/mnemon/` in each container, which maps to the
+per-agent-group `.claude/` directory on the host. To find the host path and clear it:
 
 ```bash
 docker inspect $(docker ps --filter name=nanoclaw-v2 --format '{{.Names}}' | head -1) \
