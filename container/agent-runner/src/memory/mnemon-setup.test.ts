@@ -50,6 +50,26 @@ describe('ensureMnemonSetup', () => {
     expect(logs).toEqual(['mnemon memory hooks registered']);
   });
 
+  it('persists MNEMON_DATA_DIR into the passed env on success, so the agent SDK subprocess inherits it', () => {
+    const logs: string[] = [];
+    const spawnSync = fakeSpawnSync((cmd) => ({ status: 0 }));
+    const env: NodeJS.ProcessEnv = { PATH: '/usr/bin' };
+
+    ensureMnemonSetup((msg) => logs.push(msg), { spawnSync, env });
+
+    expect(env.MNEMON_DATA_DIR).toBe('/home/node/.claude/mnemon');
+  });
+
+  it('does not set MNEMON_DATA_DIR on the passed env when mnemon setup fails', () => {
+    const logs: string[] = [];
+    const spawnSync = fakeSpawnSync((cmd) => (cmd === 'sh' ? { status: 0 } : { status: 1, stderr: 'boom' }));
+    const env: NodeJS.ProcessEnv = { PATH: '/usr/bin' };
+
+    ensureMnemonSetup((msg) => logs.push(msg), { spawnSync, env });
+
+    expect(env.MNEMON_DATA_DIR).toBeUndefined();
+  });
+
   it('logs and does not throw when setup itself fails', () => {
     const logs: string[] = [];
     const spawnSync = fakeSpawnSync((cmd) => {

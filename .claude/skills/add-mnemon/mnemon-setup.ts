@@ -14,7 +14,14 @@ import { spawnSync as defaultSpawnSync } from 'node:child_process';
  *
  * `mnemon setup` is idempotent, so calling it on every boot is fine.
  * MNEMON_DATA_DIR points into the per-agent-group `.claude/` mount so memory
- * persists across container restarts.
+ * persists across container restarts. It must also be written back into
+ * `env` (not just passed to the one-off `mnemon setup` subprocess): index.ts
+ * forwards `process.env` into the agent SDK's own subprocess env right after
+ * calling this function, and every `mnemon remember`/`recall` the agent runs
+ * via its Bash tool inherits that same env. Without this, those calls used to
+ * silently fall back to mnemon's built-in default data dir instead of the
+ * mounted one — the CLI reported success, but nothing landed in the
+ * persisted store.
  */
 const MNEMON_DATA_DIR = '/home/node/.claude/mnemon';
 
@@ -37,5 +44,6 @@ export function ensureMnemonSetup(
     log(`mnemon setup failed: ${detail}`);
     return;
   }
+  env.MNEMON_DATA_DIR = MNEMON_DATA_DIR;
   log('mnemon memory hooks registered');
 }
