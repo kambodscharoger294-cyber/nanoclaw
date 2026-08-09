@@ -67,6 +67,14 @@ export async function fetchAttachmentDataBase64(att: Attachment): Promise<string
       return undefined;
     }
   }
+  // Neither path available — was silent before; log so a future case like
+  // this one (an adapter/attachment shape with no fetchData and no url) is
+  // diagnosable instead of just showing up as a metadata-only attachment.
+  log.warn('Attachment has neither fetchData nor url — cannot download', {
+    type: att.type,
+    name: att.name,
+    keys: Object.keys(att as unknown as Record<string, unknown>),
+  });
   return undefined;
 }
 
