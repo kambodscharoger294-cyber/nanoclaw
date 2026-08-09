@@ -55,6 +55,13 @@ export async function run(_args: string[]): Promise<void> {
 
   fs.mkdirSync(path.join(projectRoot, 'logs'), { recursive: true });
 
+  // Every service-manager path below execs this script rather than dist/index.js
+  // directly, so it rebuilds from src/ on every start (see the script's own
+  // comment for why). git preserves the executable bit, but re-assert it here
+  // so a checkout method that doesn't (e.g. a zip export) can't silently break
+  // every restart path at once.
+  fs.chmodSync(path.join(projectRoot, 'scripts', 'host-entrypoint.sh'), 0o755);
+
   // Stamp the upgrade marker before the host first starts, so the startup
   // tripwire (enforceUpgradeTripwire) sees this as a sanctioned install.
   const stamped = writeUpgradeState({ via: 'setup' });
@@ -155,8 +162,8 @@ function setupLaunchd(
     <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
+        <string>${projectRoot}/scripts/host-entrypoint.sh</string>
         <string>${nodePath}</string>
-        <string>${projectRoot}/dist/index.js</string>
     </array>
     <key>WorkingDirectory</key>
     <string>${projectRoot}</string>
@@ -325,7 +332,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodePath} ${projectRoot}/dist/index.js
+ExecStart=${projectRoot}/scripts/host-entrypoint.sh ${nodePath}
 WorkingDirectory=${projectRoot}
 Restart=always
 RestartSec=5
@@ -465,7 +472,7 @@ function setupNohupFallback(
     'fi',
     '',
     'echo "Starting NanoClaw..."',
-    `nohup ${JSON.stringify(nodePath)} ${JSON.stringify(projectRoot + '/dist/index.js')} \\`,
+    `nohup ${JSON.stringify(projectRoot + '/scripts/host-entrypoint.sh')} ${JSON.stringify(nodePath)} \\`,
     `  >> ${JSON.stringify(projectRoot + '/logs/nanoclaw.log')} \\`,
     `  2>> ${JSON.stringify(projectRoot + '/logs/nanoclaw.error.log')} &`,
     '',

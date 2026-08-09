@@ -6,8 +6,8 @@
     <string>com.nanoclaw</string>
     <key>ProgramArguments</key>
     <array>
+        <string>{{PROJECT_ROOT}}/scripts/host-entrypoint.sh</string>
         <string>{{NODE_PATH}}</string>
-        <string>{{PROJECT_ROOT}}/dist/index.js</string>
     </array>
     <key>WorkingDirectory</key>
     <string>{{PROJECT_ROOT}}</string>

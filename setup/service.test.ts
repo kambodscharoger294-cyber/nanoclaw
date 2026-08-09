@@ -25,8 +25,8 @@ function generatePlist(
     <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
+        <string>${projectRoot}/scripts/host-entrypoint.sh</string>
         <string>${nodePath}</string>
-        <string>${projectRoot}/dist/index.js</string>
     </array>
     <key>WorkingDirectory</key>
     <string>${projectRoot}</string>
@@ -61,7 +61,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodePath} ${projectRoot}/dist/index.js
+ExecStart=${projectRoot}/scripts/host-entrypoint.sh ${nodePath}
 WorkingDirectory=${projectRoot}
 Restart=always
 RestartSec=5
@@ -92,13 +92,17 @@ describe('plist generation', () => {
     expect(plist).toContain('<string>/opt/node/bin/node</string>');
   });
 
-  it('points to dist/index.js', () => {
+  it('points to the build-then-exec entrypoint, not dist/index.js directly', () => {
+    // Regression: ProgramArguments used to target dist/index.js directly, so
+    // a restart after a src/ change without an intervening `pnpm run build`
+    // silently kept running stale compiled code. See host-entrypoint.sh.
     const plist = generatePlist(
       '/usr/local/bin/node',
       '/home/user/nanoclaw',
       '/home/user',
     );
-    expect(plist).toContain('/home/user/nanoclaw/dist/index.js');
+    expect(plist).toContain('/home/user/nanoclaw/scripts/host-entrypoint.sh');
+    expect(plist).not.toContain('dist/index.js');
   });
 
   it('sets log paths', () => {
@@ -154,7 +158,7 @@ describe('systemd unit generation', () => {
     expect(unit).toContain('KillMode=process');
   });
 
-  it('sets correct ExecStart', () => {
+  it('sets ExecStart to the build-then-exec entrypoint, not dist/index.js directly', () => {
     const unit = generateSystemdUnit(
       '/usr/bin/node',
       '/srv/nanoclaw',
@@ -162,7 +166,7 @@ describe('systemd unit generation', () => {
       false,
     );
     expect(unit).toContain(
-      'ExecStart=/usr/bin/node /srv/nanoclaw/dist/index.js',
+      'ExecStart=/srv/nanoclaw/scripts/host-entrypoint.sh /usr/bin/node',
     );
   });
 });
@@ -177,12 +181,14 @@ describe('WSL nohup fallback', () => {
     const wrapper = `#!/bin/bash
 set -euo pipefail
 cd ${JSON.stringify(projectRoot)}
-nohup ${JSON.stringify(nodePath)} ${JSON.stringify(projectRoot)}/dist/index.js >> ${JSON.stringify(projectRoot)}/logs/nanoclaw.log 2>> ${JSON.stringify(projectRoot)}/logs/nanoclaw.error.log &
+nohup ${JSON.stringify(projectRoot + '/scripts/host-entrypoint.sh')} ${JSON.stringify(nodePath)} >> ${JSON.stringify(projectRoot)}/logs/nanoclaw.log 2>> ${JSON.stringify(projectRoot)}/logs/nanoclaw.error.log &
 echo $! > ${JSON.stringify(pidFile)}`;
 
     expect(wrapper).toContain('#!/bin/bash');
     expect(wrapper).toContain('nohup');
     expect(wrapper).toContain(nodePath);
+    expect(wrapper).toContain('host-entrypoint.sh');
+    expect(wrapper).not.toContain('dist/index.js');
     expect(wrapper).toContain('nanoclaw.pid');
   });
 });
