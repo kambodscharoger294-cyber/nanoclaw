@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Adapter, AdapterPostableMessage, RawMessage } from 'chat';
 
-import { createChatSdkBridge, handleForwardedEvent, splitForLimit } from './chat-sdk-bridge.js';
+import {
+  createChatSdkBridge,
+  fetchAttachmentDataBase64,
+  handleForwardedEvent,
+  splitForLimit,
+} from './chat-sdk-bridge.js';
 
 vi.mock('../webhook-server.js', () => ({
   registerWebhookAdapter: vi.fn(),
@@ -537,5 +542,66 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
     expect(calls).toHaveLength(1);
     const msg = calls[0].message as { markdown?: string };
     expect(msg.markdown).toBe('plain hello');
+  });
+});
+
+describe('fetchAttachmentDataBase64', () => {
+  // Regression test: @chat-adapter/discord (4.29.0) never implements
+  // fetchData on any attachment, of any type — it only sets `url`. Before
+  // this fallback existed, every Discord attachment (Discord's own
+  // auto-generated message.txt for an over-long paste included) arrived
+  // with no fetchData to call and no url ever passed through either, so
+  // nothing downstream could read its content — silently, no error logged.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('prefers fetchData when present, never touching url', async () => {
+    const fetchData = vi.fn().mockResolvedValue(Buffer.from('hello'));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await fetchAttachmentDataBase64({
+      type: 'file',
+      url: 'https://example.com/should-not-be-fetched',
+      fetchData,
+    } as unknown as Parameters<typeof fetchAttachmentDataBase64>[0]);
+
+    expect(result).toBe(Buffer.from('hello').toString('base64'));
+    expect(fetchData).toHaveBeenCalledOnce();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a plain fetch(url) when fetchData is absent', async () => {
+    const body = new TextEncoder().encode('A new discord channel has been connected.');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => body.buffer }));
+
+    const result = await fetchAttachmentDataBase64({
+      type: 'file',
+      name: 'message.txt',
+      mimeType: 'text/plain; charset=utf-8',
+      url: 'https://cdn.discordapp.com/attachments/1/2/message.txt',
+    } as unknown as Parameters<typeof fetchAttachmentDataBase64>[0]);
+
+    expect(result).toBe(Buffer.from(body).toString('base64'));
+  });
+
+  it('returns undefined and logs, without throwing, when the url fetch fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+    const result = await fetchAttachmentDataBase64({
+      type: 'file',
+      url: 'https://cdn.discordapp.com/attachments/1/2/gone.txt',
+    } as unknown as Parameters<typeof fetchAttachmentDataBase64>[0]);
+
+    expect(result).toBeUndefined();
+  });
+
+  it('returns undefined when neither fetchData nor url is present', async () => {
+    const result = await fetchAttachmentDataBase64({
+      type: 'file',
+    } as unknown as Parameters<typeof fetchAttachmentDataBase64>[0]);
+
+    expect(result).toBeUndefined();
   });
 });

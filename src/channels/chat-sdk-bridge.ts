@@ -15,6 +15,7 @@ import {
   LinkButton,
   type CardChild,
   type Adapter,
+  type Attachment,
   type ConcurrencyStrategy,
   type Message as ChatMessage,
 } from 'chat';
@@ -33,6 +34,40 @@ interface GatewayAdapter extends Adapter {
     abortSignal?: AbortSignal,
     webhookUrl?: string,
   ): Promise<Response>;
+}
+
+/**
+ * Base64-encode an attachment's bytes, preferring the SDK's own `fetchData`
+ * (auth-aware, e.g. Slack private URLs) but falling back to a plain `fetch`
+ * of `url` when it's absent — as it always is on @chat-adapter/discord
+ * (4.29.0): that adapter only ever sets `url`, never `fetchData`, even
+ * though the `chat` package's own Attachment type documents `url` as
+ * exactly this case's fallback (public links that don't need auth handling).
+ * Without this, those attachments arrive with no way to read their content
+ * at all. Returns undefined (and logs) if neither path yields data.
+ */
+export async function fetchAttachmentDataBase64(att: Attachment): Promise<string | undefined> {
+  if (att.fetchData) {
+    try {
+      const buffer = await att.fetchData();
+      return buffer.toString('base64');
+    } catch (err) {
+      log.warn('Failed to download attachment', { type: att.type, err });
+      return undefined;
+    }
+  }
+  if (att.url) {
+    try {
+      const res = await fetch(att.url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buffer = Buffer.from(await res.arrayBuffer());
+      return buffer.toString('base64');
+    } catch (err) {
+      log.warn('Failed to download attachment via url fallback', { type: att.type, err });
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 /** Reply context extracted from a platform's raw message. */
@@ -201,14 +236,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           width: (att as unknown as Record<string, unknown>).width,
           height: (att as unknown as Record<string, unknown>).height,
         };
-        if (att.fetchData) {
-          try {
-            const buffer = await att.fetchData();
-            entry.data = buffer.toString('base64');
-          } catch (err) {
-            log.warn('Failed to download attachment', { type: att.type, err });
-          }
-        }
+        const data = await fetchAttachmentDataBase64(att);
+        if (data !== undefined) entry.data = data;
         enriched.push(entry);
       }
       serialized.attachments = enriched;
