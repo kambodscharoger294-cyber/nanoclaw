@@ -28,7 +28,7 @@ import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { EGRESS_NETWORK, egressNetworkArgs, ensureEgressNetwork } from './egress-lockdown.js';
-import { atomicChatEnvArgs } from './atomic-chat-env.js';
+import { ollamaEnvArgs } from './ollama-env.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { ghCliEnvArgs } from './gh-cli-env.js';
 import { getAgentGroup } from './db/agent-groups.js';
@@ -188,7 +188,7 @@ async function spawnContainer(session: Session): Promise<void> {
   container.stderr?.on('data', (data) => {
     for (const line of data.toString().trim().split('\n')) {
       if (!line) continue;
-      if (line.includes('[ATOMIC]')) {
+      if (line.includes('[OLLAMA]')) {
         log.info(line, { container: agentGroup.folder });
       } else {
         log.debug(line, { container: agentGroup.folder });
@@ -496,7 +496,7 @@ async function buildContainerArgs(
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${containerConfig.timezone ?? TIMEZONE}`);
-  args.push(...atomicChatEnvArgs());
+  args.push(...ollamaEnvArgs());
   args.push(...ghCliEnvArgs(containerConfig));
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).

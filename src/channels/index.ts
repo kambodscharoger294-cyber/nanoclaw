@@ -8,4 +8,3 @@
 
 import './cli.js';
 import './discord.js';
-import './signal.js';

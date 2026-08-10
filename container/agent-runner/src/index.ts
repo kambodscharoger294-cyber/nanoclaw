@@ -96,12 +96,12 @@ async function main(): Promise<void> {
       args: ['run', mcpServerPath],
       env: {},
     },
-    atomic_chat: {
+    ollama: {
       command: 'bun',
-      args: ['run', path.join(__dirname, 'atomic-chat-mcp-stdio.ts')],
+      args: ['run', path.join(__dirname, 'ollama-mcp-stdio.ts')],
       env: {
-        ...(process.env.ATOMIC_CHAT_HOST ? { ATOMIC_CHAT_HOST: process.env.ATOMIC_CHAT_HOST } : {}),
-        ...(process.env.ATOMIC_CHAT_API_KEY ? { ATOMIC_CHAT_API_KEY: process.env.ATOMIC_CHAT_API_KEY } : {}),
+        ...(process.env.OLLAMA_HOST ? { OLLAMA_HOST: process.env.OLLAMA_HOST } : {}),
+        ...(process.env.OLLAMA_ADMIN_TOOLS ? { OLLAMA_ADMIN_TOOLS: process.env.OLLAMA_ADMIN_TOOLS } : {}),
       },
     },
   };
