@@ -103,6 +103,24 @@ A single source might touch several pages:
 - A **timeline** entry (`wiki/timelines/<thread>.md`) if it's part of an ongoing chronological thread
 - Cross-references — link related pages to each other, both directions
 
+Every page (new or touched) carries Open Knowledge Format (OKF) v0.1 YAML frontmatter — the same
+convention `memory/system/definition.md` documents for this agent's own memory — prepended above the H1,
+body untouched otherwise:
+
+```yaml
+---
+type: entity   # or: concept
+title: <display name>
+description: <one-line summary>
+tags: [tag1, tag2, ...]
+resource: sources/<file>.md   # omit if no single source file backs this page
+timestamp: <YYYY-MM-DD>       # date of this edit
+---
+```
+
+`wiki/index.md` itself declares `okf_version: "0.1"` at the top (matching `memory/index.md`'s
+convention) — check it's still there when you touch the index.
+
 Each page: a short summary at the top, then detail, then a `## Sources` section listing which raw
 sources and mnemon insight IDs it's built from. Keep pages narrative, not just fact dumps — synthesis is
 the point.
