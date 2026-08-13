@@ -1,7 +1,7 @@
 ---
 name: wiki
 description: Maintain the personal LLM wiki — a persistent, cross-linked knowledge base built from ingested sources. Use whenever a source needs ingesting, a question should be answered from accumulated knowledge, or the wiki needs a health check.
-allowed-tools: Bash(pdftotext:*), Bash(tesseract:*), Bash(ffmpeg:*), Bash(curl:*), Bash(mnemon:*)
+allowed-tools: Bash(pdftotext:*), Bash(tesseract:*), Bash(ffmpeg:*), Bash(curl:*), Bash(mnemon:*), Bash(bun:*)
 ---
 
 # Wiki Maintenance
@@ -143,10 +143,20 @@ what happened recently.
 ## Query
 
 Read `wiki/index.md` first to find relevant pages before drilling in — this scales to ~100 sources /
-hundreds of pages without needing embedding search. Use `mnemon recall "<query>"` / `mnemon search
-"<query>"` to pull facts the wiki pages might not fully surface. Cite sources. A genuinely good answer
-can be filed back into the wiki as a new page rather than left in chat — that's how exploration compounds
-instead of disappearing.
+hundreds of pages on its own. Use `mnemon recall "<query>"` / `mnemon search "<query>"` to pull facts
+the wiki pages might not fully surface — this is the first move for concrete, nameable topics.
+
+For abstract or philosophical questions where the phrasing might not match the wiki's original wording
+(keyword search misses these — e.g. "why does deleting data release heat" won't keyword-match a fact
+phrased around "Landauer's principle"), fall back to meaning-based search:
+
+```bash
+bun /app/skills/wiki/scripts/mnemon-semantic-search.ts "<query>" --limit 5
+```
+
+This is a supplementary fallback, not a replacement for the index-first approach above. Cite sources. A
+genuinely good answer can be filed back into the wiki as a new page rather than left in chat — that's
+how exploration compounds instead of disappearing.
 
 ## Lint
 
